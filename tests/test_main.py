@@ -522,6 +522,28 @@ class TestMainCommandBranches:
         assert (target / "new-project.base").exists()
         assert (target / "new-project.md").exists()
 
+    def test_main_init_without_path_uses_current_directory(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        target = vault / "01-PROJECTS" / "OpenClaw"
+        target.mkdir(parents=True)
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.chdir(target)
+        monkeypatch.setattr(sys, "argv", ["notekey", "init", "--force"])
+
+        main()
+
+        captured = capsys.readouterr()
+        assert f"Created base: {target / 'OpenClaw.base'}" in captured.out
+        assert f"Created markdown: {target / 'OpenClaw.md'}" in captured.out
+        assert (target / "OpenClaw.base").exists()
+        assert (target / "OpenClaw.md").exists()
+        assert not (vault / "vault.base").exists()
+        assert not (vault / "vault.md").exists()
+
     def test_main_search_uses_obsidian_vault_default(
         self,
         vault: Path,

@@ -29,13 +29,22 @@ notekey search [path] [--tags TAGS] [--filename NAME] [--content TEXT]
 notekey read FILENAME
 ```
 
-If `path` is omitted, `notekey` uses the `OBSIDIAN_VAULT` environment variable. If that variable is not set, it uses the current directory.
+For `init`, omitting `path` uses the current directory.
+
+For `search` and `read`, omitting `path` uses the `OBSIDIAN_VAULT` environment variable. If that variable is not set, it uses the current directory.
 
 ```bash
 export OBSIDIAN_VAULT="/path/to/your/vault"
 ```
 
 ### Initialize a note folder
+
+```bash
+cd /path/to/vault/Projects/MyProject
+notekey init
+```
+
+Or pass the target folder explicitly:
 
 ```bash
 notekey init /path/to/vault/Projects/MyProject

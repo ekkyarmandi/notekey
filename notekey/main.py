@@ -234,7 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
         "path",
         nargs="?",
         default=None,
-        help="Target folder (defaults to $OBSIDIAN_VAULT or current directory)",
+        help="Target folder (defaults to current directory)",
     )
     init_parser.add_argument(
         "-t",
@@ -290,7 +290,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "init":
-        target = _get_folder(_resolve_path(args.path))
+        target = _get_folder(args.path)
         current_location = str(target)
         folder_name = target.name
         base_path = _create_base(target, folder_name, tags=args.tags, force=args.force)
