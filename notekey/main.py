@@ -2,8 +2,8 @@ import argparse
 import os
 from pathlib import Path
 
-from markdown import Markdown
-from template import BASE_FILTER_TEMPLATE, MOC_TEMPLATE
+from notekey.markdown import Markdown
+from notekey.template import BASE_FILTER_TEMPLATE, MOC_TEMPLATE
 
 
 def _resolve_path(path: str | None = None) -> str:
@@ -87,6 +87,16 @@ def _parse_filter(value: str) -> tuple[bool, str]:
     return False, value
 
 
+def _filename_candidates(md_path: Path, vault_root: Path) -> tuple[str, str, str]:
+    """Return filename candidates: stem, vault-relative path, vault-relative stem."""
+    stem = md_path.stem
+    try:
+        rel = md_path.relative_to(vault_root)
+        return stem, rel.as_posix(), rel.with_suffix("").as_posix()
+    except ValueError:
+        return stem, md_path.name, stem
+
+
 def _search_files(
     vault_root: Path,
     tags: list[str] | None = None,
@@ -126,26 +136,14 @@ def _search_files(
     for md_path in sorted(vault_root.rglob("*.md")):
         # --- filename filter (cheapest) ---
         if filename_val is not None:
-            stem = md_path.stem
-            # Also build the relative path from vault root for path-based
-            # queries like ``-f "folder/My Note.md"``.
-            try:
-                rel_path = md_path.relative_to(vault_root).as_posix()
-                rel_stem = md_path.relative_to(vault_root).with_suffix("").as_posix()
-            except ValueError:
-                rel_path = md_path.name
-                rel_stem = stem
+            candidates = _filename_candidates(md_path, vault_root)
 
             if filename_exact:
-                if filename_val not in (stem, rel_path, rel_stem):
+                if filename_val not in candidates:
                     continue
             else:
                 val_lower = filename_val.lower()
-                if (
-                    val_lower not in stem.lower()
-                    and val_lower not in rel_path.lower()
-                    and val_lower not in rel_stem.lower()
-                ):
+                if not any(val_lower in candidate.lower() for candidate in candidates):
                     continue
 
         # --- content filter (raw text scan, no full parse yet) ---

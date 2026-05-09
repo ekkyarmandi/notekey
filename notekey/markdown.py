@@ -5,7 +5,7 @@ from typing import Any
 import frontmatter
 import readtime
 
-from utils import extract_inline_tags, extract_markdown_links, extract_wiki_links, normalize_size
+from notekey.utils import extract_inline_tags, extract_markdown_links, extract_wiki_links, normalize_size
 
 
 class Markdown:

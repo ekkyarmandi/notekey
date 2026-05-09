@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from markdown import Markdown
-from utils import extract_inline_tags, extract_markdown_links, extract_wiki_links, normalize_size
+from notekey.markdown import Markdown
+from notekey.utils import extract_inline_tags, extract_markdown_links, extract_wiki_links, normalize_size
 
 # ---------------------------------------------------------------------------
 #  Fixtures
@@ -255,6 +255,12 @@ class TestMarkdownTags:
     ) -> None:
         md = Markdown(sample_md_tags_in_frontmatter_only)
         assert md.tags == ["alpha", "beta"]
+
+    def test_tags_from_frontmatter_string(self, tmp_path: Path) -> None:
+        path = tmp_path / "string-tag.md"
+        path.write_text("---\ntags: alpha\n---\nBody", encoding="utf-8")
+        md = Markdown(path)
+        assert md.tags == ["alpha"]
 
     def test_no_tags(self, sample_md_untagged: Path) -> None:
         md = Markdown(sample_md_untagged)

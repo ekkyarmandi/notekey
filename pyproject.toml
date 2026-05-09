@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "notekey"
 version = "0.1.0"
-description = "Notekey is custom library for generating markdown and bases for new project folder in obsidian"
+description = "CLI utilities for Obsidian vault notes: initialize note bases, search markdown files, and read note content."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,7 +13,22 @@ dependencies = [
     "readtime>=3.0.0",
 ]
 
+[project.scripts]
+notekey = "notekey.main:main"
+
+[tool.setuptools.packages.find]
+include = ["notekey*"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--cov=notekey --cov-report=term-missing --cov-fail-under=100"
+
+[tool.coverage.run]
+source = ["notekey"]

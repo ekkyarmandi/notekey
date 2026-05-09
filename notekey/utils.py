@@ -26,11 +26,7 @@ def extract_inline_tags(text: str) -> set[str]:
     )
 
     for match in pattern.finditer(body):
-        tag = match.group(1)
-        # Skip pure numeric tags (e.g. #123)
-        if not any(c.isalpha() for c in tag):
-            continue
-        tags.add(tag)
+        tags.add(match.group(1))
 
     return tags
 
