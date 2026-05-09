@@ -364,6 +364,35 @@ class TestMarkdownNormalizeSize:
 
 
 # ---------------------------------------------------------------------------
+#  Markdown – write
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownWrite:
+    def test_write_persists_content(self, sample_md: Path) -> None:
+        md = Markdown(sample_md)
+        original = md.content
+        md.write()
+        assert sample_md.read_text(encoding="utf-8") == original
+
+    def test_write_with_custom_content(self, sample_md: Path) -> None:
+        md = Markdown(sample_md)
+        new_content = "# New Content\n\nOverwritten.\n"
+        md.write(new_content)
+        assert sample_md.read_text(encoding="utf-8") == new_content
+        assert md.content == new_content
+
+    def test_write_updates_size_and_mtime(self, sample_md: Path) -> None:
+        md = Markdown(sample_md)
+        old_updated = md.updated_at
+        old_size = md.size
+        new_content = "short"
+        md.write(new_content)
+        assert md.size != old_size
+        assert md.updated_at > old_updated
+
+
+# ---------------------------------------------------------------------------
 #  Markdown – __repr__
 # ---------------------------------------------------------------------------
 

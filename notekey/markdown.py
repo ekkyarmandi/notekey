@@ -88,5 +88,19 @@ class Markdown:
         """Return the file size as a human-readable string."""
         return normalize_size(self._size_bytes)
 
+    def write(self, content: str | None = None) -> None:
+        """Write content back to the markdown file.
+
+        If *content* is given it replaces ``self.content``; otherwise
+        ``self.content`` is written as-is.
+        """
+        if content is not None:
+            self.content = content
+        self._path.write_text(self.content, encoding="utf-8")
+        stat = self._path.stat()
+        self._size_bytes = float(stat.st_size)
+        self.size = self._size_bytes
+        self.updated_at = datetime.datetime.fromtimestamp(stat.st_mtime)
+
     def __repr__(self) -> str:
         return f"<Markdown filename='{self.name}' size='{self._normalize_size()}'>"
