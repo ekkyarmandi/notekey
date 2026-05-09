@@ -4,4 +4,12 @@ version = "0.1.0"
 description = "Notekey is custom library for generating markdown and bases for new project folder in obsidian"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "python-frontmatter>=1.1.0",
+    "readtime>=3.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
