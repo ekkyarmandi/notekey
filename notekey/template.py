@@ -1,4 +1,4 @@
-BASE_FILTER_TEMPLATE="""
+BASE_FILTER_TEMPLATE = """
 views:
   - type: table
     name: Notes
@@ -22,7 +22,7 @@ views:
         direction: ASC
 """
 
-MOC_TEMPLATE="""
+MOC_TEMPLATE = """
 ### Notes
 ![[{name}.base]]
 """

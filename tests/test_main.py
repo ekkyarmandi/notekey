@@ -25,7 +25,6 @@ from notekey.main import (
     main,
 )
 
-
 # ---------------------------------------------------------------------------
 #  Fixtures: a mini vault with several .md files
 # ---------------------------------------------------------------------------
@@ -39,8 +38,7 @@ def vault(tmp_path: Path) -> Path:
     (root / ".obsidian").mkdir()
 
     # File A: has tags "python" and "web", mentions "flask"
-    (root / "flask-app.md").write_text(
-        """\
+    (root / "flask-app.md").write_text("""\
 ---
 title: Flask App
 tags: [python, web]
@@ -48,12 +46,10 @@ tags: [python, web]
 # Flask App
 
 Building a web app with #flask.
-"""
-    )
+""")
 
     # File B: has tags "python" and "data", mentions "pandas"
-    (root / "pandas-guide.md").write_text(
-        """\
+    (root / "pandas-guide.md").write_text("""\
 ---
 title: Pandas Guide
 tags: [python, data]
@@ -61,12 +57,10 @@ tags: [python, data]
 # Pandas Guide
 
 Working with #pandas and dataframes.
-"""
-    )
+""")
 
     # File C: has tags "javascript" and "web", mentions "react"
-    (root / "react-setup.md").write_text(
-        """\
+    (root / "react-setup.md").write_text("""\
 ---
 title: React Setup
 tags: [javascript, web]
@@ -74,30 +68,25 @@ tags: [javascript, web]
 # React Setup
 
 Getting started with #react.
-"""
-    )
+""")
 
     # File D: no frontmatter tags, but has inline #tag, no frontmatter
-    (root / "scratchpad.md").write_text(
-        """\
+    (root / "scratchpad.md").write_text("""\
 # Scratchpad
 
 Random thoughts and #ideas.
-"""
-    )
+""")
 
     # File E: in subdirectory
     sub = root / "deep"
     sub.mkdir()
-    (sub / "hidden-note.md").write_text(
-        """\
+    (sub / "hidden-note.md").write_text("""\
 ---
 title: Hidden
 tags: [python, devops]
 ---
 Hidden note about #docker and #kubernetes.
-"""
-    )
+""")
 
     return root
 
@@ -115,7 +104,9 @@ class TestPathAndVaultHelpers:
         monkeypatch.setenv("OBSIDIAN_VAULT", "/env/vault")
         assert _resolve_path() == "/env/vault"
 
-    def test_resolve_path_default_current_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_resolve_path_default_current_dir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("OBSIDIAN_VAULT", raising=False)
         assert _resolve_path() == "."
 
@@ -206,7 +197,9 @@ class TestFilenameAndRelativePathHelpers:
             "deep/hidden-note",
         )
 
-    def test_filename_candidates_outside_vault(self, tmp_path: Path, vault: Path) -> None:
+    def test_filename_candidates_outside_vault(
+        self, tmp_path: Path, vault: Path
+    ) -> None:
         note = tmp_path / "outside.md"
         note.write_text("outside")
         assert _filename_candidates(note, vault) == ("outside", "outside.md", "outside")
@@ -252,7 +245,13 @@ class TestSearchFiles:
         results = _search_files(vault)
         # 5 .md files across the vault (4 in root + 1 in deep/)
         names = {md.name for md in results}
-        assert names == {"flask-app", "pandas-guide", "react-setup", "scratchpad", "hidden-note"}
+        assert names == {
+            "flask-app",
+            "pandas-guide",
+            "react-setup",
+            "scratchpad",
+            "hidden-note",
+        }
         assert len(results) == 5
 
     def test_filename_filter(self, vault: Path) -> None:
@@ -489,9 +488,7 @@ class TestDisplayFile:
         assert "Building a web app with #flask." in captured.out
         assert "---" in captured.out
 
-    def test_no_extra_output(
-        self, vault: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_no_extra_output(self, vault: Path, capsys: pytest.CaptureFixture) -> None:
         from notekey.markdown import Markdown
 
         raw = (vault / "flask-app.md").read_text()
@@ -509,7 +506,10 @@ class TestDisplayFile:
 
 class TestMainCommandBranches:
     def test_main_init(
-        self, vault: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         target = vault / "new-project"
         target.mkdir()
@@ -523,7 +523,10 @@ class TestMainCommandBranches:
         assert (target / "new-project.md").exists()
 
     def test_main_search_uses_obsidian_vault_default(
-        self, vault: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
         monkeypatch.setattr(sys, "argv", ["notekey", "search", "--tags", "python"])
@@ -535,7 +538,10 @@ class TestMainCommandBranches:
         assert "flask-app.md" in captured.out
 
     def test_main_read_no_results(
-        self, vault: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
         monkeypatch.setattr(sys, "argv", ["notekey", "read", "missing-note"])
@@ -546,7 +552,10 @@ class TestMainCommandBranches:
         assert "No file found matching: missing-note" in captured.out
 
     def test_main_read_single_result(
-        self, vault: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
         monkeypatch.setattr(sys, "argv", ["notekey", "read", "=flask-app"])
@@ -557,7 +566,10 @@ class TestMainCommandBranches:
         assert captured.out == (vault / "flask-app.md").read_text()
 
     def test_main_read_multiple_results(
-        self, vault: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
         monkeypatch.setattr(sys, "argv", ["notekey", "read", "a"])
@@ -568,12 +580,17 @@ class TestMainCommandBranches:
         assert "Multiple matches" in captured.out
 
     def test_script_entrypoint(
-        self, vault: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
         monkeypatch.setattr(sys, "argv", ["notekey", "read", "=flask-app"])
 
-        runpy.run_path(str(Path(__file__).parents[1] / "notekey" / "main.py"), run_name="__main__")
+        runpy.run_path(
+            str(Path(__file__).parents[1] / "notekey" / "main.py"), run_name="__main__"
+        )
 
         captured = capsys.readouterr()
         assert captured.out == (vault / "flask-app.md").read_text()
@@ -600,7 +617,16 @@ class TestBuildParser:
     def test_search_accepts_all_flags(self) -> None:
         parser = build_parser()
         args = parser.parse_args(
-            ["search", "/some/path", "--tags", "a,b", "--filename", "test", "--content", "hello"]
+            [
+                "search",
+                "/some/path",
+                "--tags",
+                "a,b",
+                "--filename",
+                "test",
+                "--content",
+                "hello",
+            ]
         )
         assert args.path == "/some/path"
         assert args.tags == "a,b"

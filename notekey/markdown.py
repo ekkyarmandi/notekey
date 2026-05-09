@@ -5,7 +5,12 @@ from typing import Any
 import frontmatter
 import readtime
 
-from notekey.utils import extract_inline_tags, extract_markdown_links, extract_wiki_links, normalize_size
+from notekey.utils import (
+    extract_inline_tags,
+    extract_markdown_links,
+    extract_wiki_links,
+    normalize_size,
+)
 
 
 class Markdown:
@@ -83,6 +88,4 @@ class Markdown:
         return normalize_size(self._size_bytes)
 
     def __repr__(self) -> str:
-        return (
-            f"<Markdown filename='{self.name}' size='{self._normalize_size()}'>"
-        )
+        return f"<Markdown filename='{self.name}' size='{self._normalize_size()}'>"

@@ -45,12 +45,16 @@ def _build_filters(name: str, tags: str | None = None) -> str:
     return ", ".join(f'"{tag}"' for tag in filters)
 
 
-def _create_base(target: Path, name: str, tags: str | None = None, force: bool = False) -> Path:
+def _create_base(
+    target: Path, name: str, tags: str | None = None, force: bool = False
+) -> Path:
     vault_root = _find_vault_root(target)
     folder = target.relative_to(vault_root).as_posix()
     filters = _build_filters(name, tags)
     base_path = target / f"{name}.base"
-    content = BASE_FILTER_TEMPLATE.format(folder=folder, name=name, filters=filters).lstrip()
+    content = BASE_FILTER_TEMPLATE.format(
+        folder=folder, name=name, filters=filters
+    ).lstrip()
 
     if base_path.exists() and not force:
         raise FileExistsError(f"Base file already exists: {base_path}")
@@ -124,9 +128,7 @@ def _search_files(
     filename_exact, filename_val = (
         _parse_filter(filename) if filename else (False, None)
     )
-    content_exact, content_val = (
-        _parse_filter(content) if content else (False, None)
-    )
+    content_exact, content_val = _parse_filter(content) if content else (False, None)
     parsed_tags: list[tuple[bool, str]] = (
         [_parse_filter(t) for t in tags] if tags else []
     )
@@ -199,11 +201,7 @@ def _display_search_results(results: list[Markdown], vault_root: Path) -> None:
 
     for md in results:
         rel = _relative_to_vault(md, vault_root)
-        tags_str = (
-            ", ".join(md.tags[:5])
-            + ("..." if len(md.tags) > 5 else "")
-            or "—"
-        )
+        tags_str = ", ".join(md.tags[:5]) + ("..." if len(md.tags) > 5 else "") or "—"
         print(
             f"  {rel:<{name_width}}  "
             f"tags: [{tags_str}]  "
@@ -250,7 +248,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # -- search -------------------------------------------------------------
-    search_parser = subparsers.add_parser("search", help="Search markdown files in the vault")
+    search_parser = subparsers.add_parser(
+        "search", help="Search markdown files in the vault"
+    )
     search_parser.add_argument(
         "path",
         nargs="?",
@@ -274,7 +274,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # -- read ---------------------------------------------------------------
-    read_parser = subparsers.add_parser("read", help="Read a single markdown file by name or path")
+    read_parser = subparsers.add_parser(
+        "read", help="Read a single markdown file by name or path"
+    )
     read_parser.add_argument(
         "filename",
         help="Filename or path to match — first match wins (prefix = for exact)",

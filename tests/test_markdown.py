@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from notekey.markdown import Markdown
-from notekey.utils import extract_inline_tags, extract_markdown_links, extract_wiki_links, normalize_size
+from notekey.utils import (
+    extract_inline_tags,
+    extract_markdown_links,
+    extract_wiki_links,
+    normalize_size,
+)
 
 # ---------------------------------------------------------------------------
 #  Fixtures
@@ -236,9 +241,7 @@ class TestMarkdownInit:
 
 
 class TestMarkdownTags:
-    def test_tags_combined_from_frontmatter_and_inline(
-        self, sample_md: Path
-    ) -> None:
+    def test_tags_combined_from_frontmatter_and_inline(self, sample_md: Path) -> None:
         md = Markdown(sample_md)
         # frontmatter: project, documentation, obsidian
         # inline: python, testing, project/active, topic/obsidian/plugins
@@ -309,9 +312,7 @@ class TestMarkdownMetadata:
         assert md.metadata["created"] == datetime.date(2024, 1, 15)
         assert md.metadata["status"] == "active"
 
-    def test_no_frontmatter_metadata(
-        self, sample_md_no_frontmatter: Path
-    ) -> None:
+    def test_no_frontmatter_metadata(self, sample_md_no_frontmatter: Path) -> None:
         md = Markdown(sample_md_no_frontmatter)
         assert md.metadata == {}
 

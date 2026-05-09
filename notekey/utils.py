@@ -20,9 +20,7 @@ def extract_inline_tags(text: str) -> set[str]:
     # Match #identifier (with optional /path).  The tag body cannot
     # contain a trailing period so that ``#tag.`` correctly yields ``tag``.
     pattern = re.compile(
-        r"(?:^|(?<=\s))"
-        r"#([a-zA-Z_][a-zA-Z0-9_/-]*)"
-        r"(?=\s|$|[.,;:!?)])"
+        r"(?:^|(?<=\s))" r"#([a-zA-Z_][a-zA-Z0-9_/-]*)" r"(?=\s|$|[.,;:!?)])"
     )
 
     for match in pattern.finditer(body):
