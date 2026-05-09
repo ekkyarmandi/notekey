@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "notekey"
-version = "0.2.0"
+version = "0.3.0"
 description = "CLI utilities for Obsidian vault notes: initialize note bases, search markdown files, and read note content."
 readme = "README.md"
 requires-python = ">=3.11"

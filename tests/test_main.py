@@ -10,13 +10,21 @@ import notekey.main as main_module
 
 from notekey.main import (
     _build_filters,
+    _compute_backlinks,
+    _compute_stats,
+    _compute_tags,
     _create_base,
     _create_markdown,
+    _display_backlinks,
     _display_file,
     _display_search_results,
+    _display_stats,
+    _display_tags,
     _filename_candidates,
     _find_vault_root,
     _get_folder,
+    _json_serializable,
+    _open_in_obsidian,
     _parse_filter,
     _relative_to_vault,
     _resolve_path,
@@ -86,6 +94,48 @@ title: Hidden
 tags: [python, devops]
 ---
 Hidden note about #docker and #kubernetes.
+""")
+
+    return root
+
+
+@pytest.fixture
+def vault_with_links(tmp_path: Path) -> Path:
+    """A small vault where notes contain wiki links to each other."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / ".obsidian").mkdir()
+
+    (root / "note-a.md").write_text("""\
+---
+title: Note A
+tags: [alpha]
+---
+Links to [[note-b]] and [[note-c]].
+""")
+
+    (root / "note-b.md").write_text("""\
+---
+title: Note B
+tags: [beta]
+---
+Links to [[note-a]] and [[note-c]].
+""")
+
+    (root / "note-c.md").write_text("""\
+---
+title: Note C
+tags: [gamma]
+---
+No outgoing links.
+""")
+
+    (root / "note-d.md").write_text("""\
+---
+title: Note D
+tags: [delta]
+---
+Links to [[note-a|Display]] and [[note-b]].
 """)
 
     return root
@@ -469,6 +519,28 @@ class TestDisplaySearchResults:
         assert "python" in captured.out
         assert "web" in captured.out
 
+    def test_json_output(self, vault: Path, capsys: pytest.CaptureFixture) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault / "flask-app.md")
+        _display_search_results([md], vault, json_output=True)
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["name"] == "flask-app"
+        assert "python" in data[0]["tags"]
+        assert "web" in data[0]["tags"]
+
+    def test_json_output_empty(self, capsys: pytest.CaptureFixture) -> None:
+        _display_search_results([], Path.cwd(), json_output=True)
+        captured = capsys.readouterr()
+        import json
+
+        assert json.loads(captured.out) == []
+
 
 # ---------------------------------------------------------------------------
 #  _display_file  (smoke tests)
@@ -673,3 +745,491 @@ class TestBuildParser:
         parser = build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["read"])
+
+
+# ---------------------------------------------------------------------------
+#  _json_serializable
+# ---------------------------------------------------------------------------
+
+
+class TestJsonSerializable:
+    def test_converts_markdown_to_dict(self, vault: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault / "flask-app.md")
+        data = _json_serializable(md, vault)
+        assert data["name"] == "flask-app"
+        assert data["path"] == "flask-app.md"
+        assert "python" in data["tags"]
+        assert isinstance(data["size_bytes"], int)
+        assert data["title"] == "Flask App"
+
+    def test_note_outside_vault(self, vault: Path, tmp_path: Path) -> None:
+        from notekey.markdown import Markdown
+
+        path = tmp_path / "outside.md"
+        path.write_text("# Outside")
+        md = Markdown(path)
+        data = _json_serializable(md, vault)
+        assert data["path"] == "outside.md"
+
+
+# ---------------------------------------------------------------------------
+#  _compute_tags / _display_tags
+# ---------------------------------------------------------------------------
+
+
+class TestComputeTags:
+    def test_computes_tag_counts(self, vault: Path) -> None:
+        tags = _compute_tags(vault)
+        # python: 3 (flask-app, pandas-guide, hidden-note)
+        # web: 2 (flask-app, react-setup)
+        # data: 1, javascript: 1, devops: 1, ...
+        tag_dict = dict(tags)
+        assert tag_dict["python"] == 3
+        assert tag_dict["web"] == 2
+
+    def test_empty_vault(self, tmp_path: Path) -> None:
+        root = tmp_path / "empty"
+        root.mkdir()
+        assert _compute_tags(root) == []
+
+
+class TestDisplayTags:
+    def test_with_results(self, vault: Path, capsys: pytest.CaptureFixture) -> None:
+        tags = _compute_tags(vault)
+        _display_tags(tags)
+        captured = capsys.readouterr()
+        assert "python" in captured.out
+        assert "3" in captured.out
+
+    def test_json_output(self, vault: Path, capsys: pytest.CaptureFixture) -> None:
+        tags = _compute_tags(vault)
+        _display_tags(tags, json_output=True)
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        assert any(d["tag"] == "python" and d["count"] == 3 for d in data)
+
+    def test_empty(self, capsys: pytest.CaptureFixture) -> None:
+        _display_tags([])
+        captured = capsys.readouterr()
+        assert "No tags found" in captured.out
+
+    def test_json_empty(self, capsys: pytest.CaptureFixture) -> None:
+        _display_tags([], json_output=True)
+        captured = capsys.readouterr()
+        import json
+
+        assert json.loads(captured.out) == []
+
+
+# ---------------------------------------------------------------------------
+#  _compute_backlinks / _display_backlinks
+# ---------------------------------------------------------------------------
+
+
+class TestComputeBacklinks:
+    def test_finds_backlinks(self, vault_with_links: Path) -> None:
+        results = _compute_backlinks(vault_with_links, "note-a")
+        names = {md.name for md in results}
+        # note-b links to note-a, note-d links to note-a|Display
+        assert "note-b" in names
+        assert "note-d" in names
+        # note-a does not backlink to itself
+        assert "note-a" not in names
+        # note-c has no links to note-a
+        assert "note-c" not in names
+
+    def test_no_backlinks(self, vault_with_links: Path) -> None:
+        results = _compute_backlinks(vault_with_links, "note-c")
+        # note-a links to note-c, note-b links to note-c
+        assert {md.name for md in results} == {"note-a", "note-b"}
+
+    def test_target_not_found(self, vault_with_links: Path) -> None:
+        with pytest.raises(FileNotFoundError, match="missing-note"):
+            _compute_backlinks(vault_with_links, "missing-note")
+
+
+class TestDisplayBacklinks:
+    def test_with_results(
+        self, vault_with_links: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        results = _compute_backlinks(vault_with_links, "note-a")
+        _display_backlinks(results, "note-a", vault_with_links)
+        captured = capsys.readouterr()
+        assert "note-b" in captured.out
+        assert "note-d" in captured.out
+
+    def test_json_output(
+        self, vault_with_links: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        results = _compute_backlinks(vault_with_links, "note-a")
+        _display_backlinks(results, "note-a", vault_with_links, json_output=True)
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        names = {d["name"] for d in data}
+        assert "note-b" in names
+        assert "note-d" in names
+
+    def test_no_results(
+        self, vault_with_links: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        _display_backlinks([], "note-x", vault_with_links)
+        captured = capsys.readouterr()
+        assert "No backlinks found" in captured.out
+
+
+# ---------------------------------------------------------------------------
+#  _open_in_obsidian
+# ---------------------------------------------------------------------------
+
+
+class TestOpenInObsidian:
+    def test_constructs_correct_uri(
+        self, vault: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from notekey.markdown import Markdown
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> None:
+            calls.append(cmd)
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+
+        md = Markdown(vault / "flask-app.md")
+        uri = _open_in_obsidian(vault, md)
+        assert "obsidian://open?vault=" in uri
+        assert "file=flask-app.md" in uri
+        assert len(calls) == 1
+        assert calls[0] == ["open", uri]
+
+
+# ---------------------------------------------------------------------------
+#  _compute_stats / _display_stats
+# ---------------------------------------------------------------------------
+
+
+class TestComputeStats:
+    def test_computes_stats(self, vault: Path) -> None:
+        stats = _compute_stats(vault)
+        assert stats["total_notes"] == 5
+        assert stats["total_unique_tags"] >= 5
+        assert stats["total_size_bytes"] > 0
+        assert stats["total_words"] > 0
+        assert stats["newest"] is not None
+        assert stats["oldest"] is not None
+        assert len(stats["top_tags"]) > 0
+
+    def test_empty_vault(self, tmp_path: Path) -> None:
+        root = tmp_path / "empty"
+        root.mkdir()
+        stats = _compute_stats(root)
+        assert stats["total_notes"] == 0
+        assert stats["total_unique_tags"] == 0
+        assert stats["total_size_bytes"] == 0
+        assert stats["newest"] is None
+
+
+class TestDisplayStats:
+    def test_with_data(self, vault: Path, capsys: pytest.CaptureFixture) -> None:
+        stats = _compute_stats(vault)
+        _display_stats(stats, vault)
+        captured = capsys.readouterr()
+        assert "Total notes:" in captured.out
+        assert "5" in captured.out
+
+    def test_json_output(self, vault: Path, capsys: pytest.CaptureFixture) -> None:
+        stats = _compute_stats(vault)
+        _display_stats(stats, vault, json_output=True)
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert data["total_notes"] == 5
+        assert isinstance(data["top_tags"], list)
+
+    def test_empty(self, capsys: pytest.CaptureFixture) -> None:
+        _display_stats(
+            {
+                "total_notes": 0,
+                "total_unique_tags": 0,
+                "total_size_bytes": 0,
+                "total_words": 0,
+                "newest": None,
+                "oldest": None,
+                "top_tags": [],
+            },
+            Path.cwd(),
+        )
+        captured = capsys.readouterr()
+        assert "No notes found" in captured.out
+
+    def test_json_empty(self, capsys: pytest.CaptureFixture) -> None:
+        _display_stats(
+            {
+                "total_notes": 0,
+                "total_unique_tags": 0,
+                "total_size_bytes": 0,
+                "total_words": 0,
+                "newest": None,
+                "oldest": None,
+                "top_tags": [],
+            },
+            Path.cwd(),
+            json_output=True,
+        )
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert data["total_notes"] == 0
+
+
+# ---------------------------------------------------------------------------
+#  main() — new subcommands
+# ---------------------------------------------------------------------------
+
+
+class TestMainNewSubcommands:
+    def test_main_tags(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "tags"])
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "python" in captured.out
+        assert "unique tags" in captured.out
+
+    def test_main_tags_json(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "tags", "--json"])
+
+        main()
+
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+
+    def test_main_backlinks(
+        self,
+        vault_with_links: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_links))
+        monkeypatch.setattr(sys, "argv", ["notekey", "backlinks", "note-a"])
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "note-b" in captured.out
+        assert "note-d" in captured.out
+
+    def test_main_backlinks_json(
+        self,
+        vault_with_links: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_links))
+        monkeypatch.setattr(sys, "argv", ["notekey", "backlinks", "note-a", "--json"])
+
+        main()
+
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        names = {d["name"] for d in data}
+        assert "note-b" in names
+
+    def test_main_backlinks_not_found(
+        self,
+        vault_with_links: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_links))
+        monkeypatch.setattr(sys, "argv", ["notekey", "backlinks", "missing"])
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "No note found" in captured.out
+
+    def test_main_open(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "open", "=flask-app"])
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: None)
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "Opened:" in captured.out
+        assert "obsidian://" in captured.out
+
+    def test_main_open_not_found(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "open", "missing"])
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "No file found matching" in captured.out
+
+    def test_main_open_multiple_matches(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "open", "a"])
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: None)
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "Multiple matches" in captured.out
+
+    def test_main_stats(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "stats"])
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "Total notes:" in captured.out
+        assert "5" in captured.out
+
+    def test_main_stats_json(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "stats", "--json"])
+
+        main()
+
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert data["total_notes"] == 5
+
+    def test_main_search_json(
+        self,
+        vault: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
+        monkeypatch.setattr(sys, "argv", ["notekey", "search", "--json"])
+
+        main()
+
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        assert len(data) == 5
+
+
+# ---------------------------------------------------------------------------
+#  build_parser — new subcommands
+# ---------------------------------------------------------------------------
+
+
+class TestBuildParserNewSubcommands:
+    def test_tags_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["tags"])
+        assert args.command == "tags"
+        assert not args.json
+
+    def test_tags_json_flag(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["tags", "--json"])
+        assert args.json is True
+
+    def test_backlinks_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["backlinks", "my-note"])
+        assert args.command == "backlinks"
+        assert args.filename == "my-note"
+
+    def test_backlinks_json_flag(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["backlinks", "note", "--json"])
+        assert args.json is True
+
+    def test_open_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["open", "my-note"])
+        assert args.command == "open"
+        assert args.filename == "my-note"
+
+    def test_stats_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["stats"])
+        assert args.command == "stats"
+        assert not args.json
+
+    def test_stats_json_flag(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["stats", "--json"])
+        assert args.json is True
+
+    def test_search_json_flag(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["search", "--json"])
+        assert args.json is True
+
+    def test_version_short_flag(self) -> None:
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["-v"])
+
+    def test_version_long_flag(self) -> None:
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--version"])

@@ -1,9 +1,20 @@
 import argparse
+import json
 import os
+import subprocess
+from collections import Counter
+from importlib.metadata import version
 from pathlib import Path
+from urllib.parse import quote
 
 from notekey.markdown import Markdown
 from notekey.template import BASE_FILTER_TEMPLATE, MOC_TEMPLATE
+from notekey.utils import normalize_size
+
+
+# ---------------------------------------------------------------------------
+#  Path helpers
+# ---------------------------------------------------------------------------
 
 
 def _resolve_path(path: str | None = None) -> str:
@@ -32,6 +43,19 @@ def _find_vault_root(target: Path) -> Path:
         if (candidate / ".obsidian").is_dir():
             return candidate
     raise FileNotFoundError(f"No Obsidian vault (.obsidian) found above: {target}")
+
+
+def _relative_to_vault(md: Markdown, vault_root: Path) -> str:
+    """Return the file path relative to the vault root."""
+    try:
+        return md._path.relative_to(vault_root).as_posix()
+    except ValueError:
+        return md._path.name
+
+
+# ---------------------------------------------------------------------------
+#  Init helpers
+# ---------------------------------------------------------------------------
 
 
 def _build_filters(name: str, tags: str | None = None) -> str:
@@ -111,20 +135,7 @@ def _search_files(
 
     Filter values prefixed with ``=`` require an **exact** match;
     unprefixed values use substring / containment matching.
-
-    Examples::
-
-        --tags py          # tag contains "py" (matches "python")
-        --tags "=python"   # tag equals "python"
-        --filename test    # filename contains "test"
-        --filename "=test" # filename equals "test"
-
-    Filters are applied cheapest-first:
-      1. Filename (no parsing needed)
-      2. Content  (raw text scan)
-      3. Tags     (requires full ``Markdown`` object)
     """
-    # Parse exact/substring flags upfront.
     filename_exact, filename_val = (
         _parse_filter(filename) if filename else (False, None)
     )
@@ -187,17 +198,44 @@ def _search_files(
     return results
 
 
-def _display_search_results(results: list[Markdown], vault_root: Path) -> None:
-    """Print search results with paths relative to the vault root."""
+def _json_serializable(md: Markdown, vault_root: Path) -> dict:
+    """Convert a ``Markdown`` object to a JSON-safe dictionary."""
+    return {
+        "name": md.name,
+        "path": _relative_to_vault(md, vault_root),
+        "tags": md.tags,
+        "links": md.links,
+        "reading_time": md.reading_time,
+        "size": md._normalize_size(),
+        "size_bytes": int(md._size_bytes),
+        "created_at": md.created_at.isoformat(),
+        "updated_at": md.updated_at.isoformat(),
+        "title": md.metadata.get("title", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Display helpers
+# ---------------------------------------------------------------------------
+
+
+def _display_search_results(
+    results: list[Markdown], vault_root: Path, json_output: bool = False
+) -> None:
+    """Print search results — table or JSON."""
+    if json_output:
+        data = [_json_serializable(md, vault_root) for md in results]
+        print(json.dumps(data, indent=2))
+        return
+
     if not results:
         print("No matching files found.")
         return
 
     print(f"\nFound {len(results)} file{'s' if len(results) != 1 else ''}:\n")
 
-    # Column widths
     name_width = max(len(_relative_to_vault(r, vault_root)) for r in results)
-    name_width = max(name_width, 8) + 2  ##### ≥ "Filename"
+    name_width = max(name_width, 8) + 2
 
     for md in results:
         rel = _relative_to_vault(md, vault_root)
@@ -211,21 +249,215 @@ def _display_search_results(results: list[Markdown], vault_root: Path) -> None:
     print()
 
 
-def _relative_to_vault(md: Markdown, vault_root: Path) -> str:
-    """Return the file path relative to the vault root."""
-    try:
-        return md._path.relative_to(vault_root).as_posix()
-    except ValueError:
-        return md._path.name
-
-
 def _display_file(md: Markdown, vault_root: Path) -> None:
     """Print the full raw content of a ``Markdown`` file."""
     print(md.content, end="")
 
 
+# ---------------------------------------------------------------------------
+#  Tags
+# ---------------------------------------------------------------------------
+
+
+def _compute_tags(vault_root: Path) -> list[tuple[str, int]]:
+    """Walk the vault and return (tag, count) sorted by frequency descending."""
+    files = _search_files(vault_root)
+    counter: Counter[str] = Counter()
+    for md in files:
+        for tag in md.tags:
+            counter[tag] += 1
+    return counter.most_common()
+
+
+def _display_tags(
+    tags: list[tuple[str, int]], json_output: bool = False
+) -> None:
+    """Print tag index — table or JSON."""
+    if json_output:
+        data = [{"tag": t, "count": c} for t, c in tags]
+        print(json.dumps(data, indent=2))
+        return
+
+    if not tags:
+        print("No tags found in vault.")
+        return
+
+    print(f"\n{len(tags)} unique tags:\n")
+    max_width = max(len(t) for t, _ in tags)
+    for tag, count in tags:
+        print(f"  {tag:<{max_width + 2}} {count}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+#  Backlinks
+# ---------------------------------------------------------------------------
+
+
+def _compute_backlinks(vault_root: Path, target: str) -> list[Markdown]:
+    """Return notes whose links reference *target*."""
+    target_note = _search_files(vault_root, filename=f"={target}")
+    if not target_note:
+        # Try substring match as fallback
+        target_note = _search_files(vault_root, filename=target)
+
+    if not target_note:
+        raise FileNotFoundError(f"No note found matching: {target}")
+
+    target_md = target_note[0]
+    backlinked: list[Markdown] = []
+
+    for md in _search_files(vault_root):
+        if md.name == target_md.name:
+            continue
+        for link in md.links:
+            if link == target_md.name or link.startswith(f"{target_md.name}|"):
+                backlinked.append(md)
+                break
+
+    return backlinked
+
+
+def _display_backlinks(
+    results: list[Markdown],
+    target: str,
+    vault_root: Path,
+    json_output: bool = False,
+) -> None:
+    """Print backlinks — table or JSON."""
+    if json_output:
+        data = [_json_serializable(md, vault_root) for md in results]
+        print(json.dumps(data, indent=2))
+        return
+
+    if not results:
+        print(f"No backlinks found for: {target}")
+        return
+
+    print(
+        f"\n{len(results)} note{'s' if len(results) != 1 else ''} "
+        f"linking to '{target}':\n"
+    )
+    _display_search_results(results, vault_root)
+
+
+# ---------------------------------------------------------------------------
+#  Open
+# ---------------------------------------------------------------------------
+
+
+def _open_in_obsidian(vault_root: Path, md: Markdown) -> str:
+    """Open *md* in Obsidian and return the URI used."""
+    vault_name = vault_root.name
+    rel_path = _relative_to_vault(md, vault_root)
+    uri = f"obsidian://open?vault={quote(vault_name)}&file={quote(rel_path)}"
+    subprocess.run(["open", uri], check=False)
+    return uri
+
+
+# ---------------------------------------------------------------------------
+#  Stats
+# ---------------------------------------------------------------------------
+
+
+def _compute_stats(vault_root: Path) -> dict:
+    """Walk the vault and return aggregate statistics."""
+    files = _search_files(vault_root)
+
+    if not files:
+        return {
+            "total_notes": 0,
+            "total_unique_tags": 0,
+            "total_size_bytes": 0,
+            "total_words": 0,
+            "newest": None,
+            "oldest": None,
+            "top_tags": [],
+        }
+
+    total_size = sum(md._size_bytes for md in files)
+    total_words = sum(len(md._body.split()) for md in files)
+
+    all_tags: set[str] = set()
+    tag_counter: Counter[str] = Counter()
+    for md in files:
+        all_tags.update(md.tags)
+        for tag in md.tags:
+            tag_counter[tag] += 1
+
+    newest = max(files, key=lambda m: m.updated_at)
+    oldest = min(files, key=lambda m: m.created_at)
+
+    return {
+        "total_notes": len(files),
+        "total_unique_tags": len(all_tags),
+        "total_size_bytes": int(total_size),
+        "total_words": total_words,
+        "newest": newest,
+        "oldest": oldest,
+        "top_tags": tag_counter.most_common(10),
+    }
+
+
+def _display_stats(
+    stats: dict, vault_root: Path, json_output: bool = False
+) -> None:
+    """Print vault stats — table or JSON."""
+    if json_output:
+        data = {
+            "total_notes": stats["total_notes"],
+            "total_unique_tags": stats["total_unique_tags"],
+            "total_size_bytes": stats["total_size_bytes"],
+            "total_size": normalize_size(stats["total_size_bytes"]),
+            "total_words": stats["total_words"],
+            "newest": _relative_to_vault(stats["newest"], vault_root)
+            if stats["newest"]
+            else None,
+            "oldest": _relative_to_vault(stats["oldest"], vault_root)
+            if stats["oldest"]
+            else None,
+            "top_tags": [{"tag": t, "count": c} for t, c in stats["top_tags"]],
+        }
+        print(json.dumps(data, indent=2))
+        return
+
+    if stats["total_notes"] == 0:
+        print("No notes found in vault.")
+        return
+
+    print(f"\n  Total notes:         {stats['total_notes']}")
+    print(f"  Unique tags:         {stats['total_unique_tags']}")
+    print(f"  Total size:          {normalize_size(stats['total_size_bytes'])}")
+    print(f"  Total words:         {stats['total_words']:,}")
+    if stats["newest"]:
+        print(
+            f"  Newest note:         {_relative_to_vault(stats['newest'], vault_root)}"
+        )
+    if stats["oldest"]:
+        print(
+            f"  Oldest note:         {_relative_to_vault(stats['oldest'], vault_root)}"
+        )
+    if stats["top_tags"]:
+        print(f"\n  Top tags:")
+        max_width = max(len(t) for t, _ in stats["top_tags"])
+        for tag, count in stats["top_tags"]:
+            print(f"    {tag:<{max_width + 2}} {count}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+#  CLI
+# ---------------------------------------------------------------------------
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="notekey")
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {version('notekey')}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # -- init ---------------------------------------------------------------
@@ -272,6 +504,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--content",
         help="Substring to match in the file content (case-insensitive)",
     )
+    search_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
 
     # -- read ---------------------------------------------------------------
     read_parser = subparsers.add_parser(
@@ -280,6 +517,49 @@ def build_parser() -> argparse.ArgumentParser:
     read_parser.add_argument(
         "filename",
         help="Filename or path to match — first match wins (prefix = for exact)",
+    )
+
+    # -- tags ---------------------------------------------------------------
+    tags_parser = subparsers.add_parser(
+        "tags", help="List all unique tags with counts"
+    )
+    tags_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
+
+    # -- backlinks ----------------------------------------------------------
+    backlinks_parser = subparsers.add_parser(
+        "backlinks", help="Show notes linking to a target note"
+    )
+    backlinks_parser.add_argument(
+        "filename",
+        help="Target note name or path to find backlinks for",
+    )
+    backlinks_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
+    )
+
+    # -- open ---------------------------------------------------------------
+    open_parser = subparsers.add_parser(
+        "open", help="Open a note in Obsidian"
+    )
+    open_parser.add_argument(
+        "filename",
+        help="Filename or path to match — first match wins",
+    )
+
+    # -- stats --------------------------------------------------------------
+    stats_parser = subparsers.add_parser(
+        "stats", help="Show vault-wide statistics"
+    )
+    stats_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON",
     )
 
     return parser
@@ -311,7 +591,7 @@ def main() -> None:
             filename=args.filename,
             content=args.content,
         )
-        _display_search_results(results, vault_root)
+        _display_search_results(results, vault_root, json_output=args.json)
 
     elif args.command == "read":
         target = _get_folder(_resolve_path())
@@ -325,6 +605,44 @@ def main() -> None:
             _display_file(results[0], vault_root)
         else:
             _display_file(results[0], vault_root)
+
+    elif args.command == "tags":
+        target = _get_folder(_resolve_path())
+        vault_root = _find_vault_root(target)
+        tags_list = _compute_tags(vault_root)
+        _display_tags(tags_list, json_output=args.json)
+
+    elif args.command == "backlinks":
+        target = _get_folder(_resolve_path())
+        vault_root = _find_vault_root(target)
+        try:
+            results = _compute_backlinks(vault_root, args.filename)
+        except FileNotFoundError as e:
+            print(str(e))
+            return
+        _display_backlinks(results, args.filename, vault_root, json_output=args.json)
+
+    elif args.command == "open":
+        target = _get_folder(_resolve_path())
+        vault_root = _find_vault_root(target)
+        results = _search_files(vault_root, filename=args.filename)
+
+        if not results:
+            print(f"No file found matching: {args.filename}")
+        else:
+            if len(results) > 1:
+                print(
+                    f"Multiple matches — opening first of {len(results)}: "
+                    f"{_relative_to_vault(results[0], vault_root)}"
+                )
+            uri = _open_in_obsidian(vault_root, results[0])
+            print(f"Opened: {uri}")
+
+    elif args.command == "stats":
+        target = _get_folder(_resolve_path())
+        vault_root = _find_vault_root(target)
+        stats = _compute_stats(vault_root)
+        _display_stats(stats, vault_root, json_output=args.json)
 
 
 if __name__ == "__main__":
