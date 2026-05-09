@@ -15,6 +15,13 @@ def _get_folder(path: str | None = None) -> Path:
     return target
 
 
+def _find_vault_root(target: Path) -> Path:
+    for candidate in [target, *target.parents]:
+        if (candidate / ".obsidian").is_dir():
+            return candidate
+    raise FileNotFoundError(f"No Obsidian vault (.obsidian) found above: {target}")
+
+
 def _build_filters(name: str, tags: str | None = None) -> str:
     parsed_tags = [tag.strip() for tag in tags.split(",")] if tags else []
 
@@ -27,7 +34,8 @@ def _build_filters(name: str, tags: str | None = None) -> str:
 
 
 def _create_base(target: Path, name: str, tags: str | None = None, force: bool = False) -> Path:
-    folder = target.name
+    vault_root = _find_vault_root(target)
+    folder = target.relative_to(vault_root).as_posix()
     filters = _build_filters(name, tags)
     base_path = target / f"{name}.base"
     content = BASE_FILTER_TEMPLATE.format(folder=folder, name=name, filters=filters).lstrip()
