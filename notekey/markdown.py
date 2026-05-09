@@ -42,7 +42,8 @@ class Markdown:
         self.name = self._path.stem
         self._size_bytes: float = float(stat.st_size)
         self.size = self._size_bytes
-        self.created_at = datetime.datetime.fromtimestamp(stat.st_birthtime)
+        created_ts = getattr(stat, "st_birthtime", stat.st_ctime)
+        self.created_at = datetime.datetime.fromtimestamp(created_ts)
         self.updated_at = datetime.datetime.fromtimestamp(stat.st_mtime)
 
         # Full raw content (frontmatter + body) — needed for link extraction.
