@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from main import _display_search_results, _search_files, build_parser
+from main import _display_file, _display_search_results, _parse_filter, _search_files, build_parser
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +83,28 @@ Hidden note about #docker and #kubernetes.
 
 
 # ---------------------------------------------------------------------------
+#  _parse_filter
+# ---------------------------------------------------------------------------
+
+
+class TestParseFilter:
+    def test_substring_default(self) -> None:
+        assert _parse_filter("python") == (False, "python")
+
+    def test_exact_with_equals(self) -> None:
+        assert _parse_filter("=python") == (True, "python")
+
+    def test_exact_preserves_spaces(self) -> None:
+        assert _parse_filter("= hello world") == (True, " hello world")
+
+    def test_empty_string(self) -> None:
+        assert _parse_filter("") == (False, "")
+
+    def test_just_equals(self) -> None:
+        assert _parse_filter("=") == (True, "")
+
+
+# ---------------------------------------------------------------------------
 #  _search_files
 # ---------------------------------------------------------------------------
 
@@ -127,6 +149,19 @@ class TestSearchFiles:
     def test_tags_case_insensitive(self, vault: Path) -> None:
         results = _search_files(vault, tags=["PYTHON"])
         assert len(results) == 3
+
+    def test_tags_substring_match(self, vault: Path) -> None:
+        """``--tags py`` matches files whose tags contain \"py\" (e.g. python)."""
+        results = _search_files(vault, tags=["py"])
+        names = {md.name for md in results}
+        # "py" matches "python" (flask-app, pandas-guide, hidden-note)
+        # and also matches "javascript"... wait, doesn't contain "py"
+        # "py" is substring of "python" and "pytorch" but none of our test files have pytorch
+        assert "flask-app" in names
+        assert "pandas-guide" in names
+        assert "hidden-note" in names
+        # "react-setup" has tags [javascript, web] — neither contains "py"
+        assert "react-setup" not in names
 
     def test_content_filter(self, vault: Path) -> None:
         results = _search_files(vault, content="pandas")
@@ -188,6 +223,74 @@ class TestSearchFiles:
         assert "notes" not in names
         assert "readme" not in names
 
+    # -- exact-match tests ------------------------------------------------
+
+    def test_tags_exact_match(self, vault: Path) -> None:
+        """``--tags "=python"`` matches only files with exactly the tag "python"."""
+        results = _search_files(vault, tags=["=python"])
+        names = {md.name for md in results}
+        assert "flask-app" in names
+        assert "pandas-guide" in names
+        assert "hidden-note" in names
+
+    def test_tags_exact_no_substring(self, vault: Path) -> None:
+        """``--tags "=py"`` does NOT match files with tag "python"."""
+        results = _search_files(vault, tags=["=py"])
+        assert results == []
+
+    def test_tags_exact_no_match(self, vault: Path) -> None:
+        results = _search_files(vault, tags=["=nonexistent"])
+        assert results == []
+
+    def test_filename_exact(self, vault: Path) -> None:
+        """``--filename "=flask-app"`` matches only that exact filename."""
+        results = _search_files(vault, filename="=flask-app")
+        assert len(results) == 1
+        assert results[0].name == "flask-app"
+
+    def test_filename_exact_no_substring(self, vault: Path) -> None:
+        """``--filename "=flask"`` does NOT match "flask-app"."""
+        results = _search_files(vault, filename="=flask")
+        assert results == []
+
+    def test_content_exact(self, vault: Path) -> None:
+        """Exact content matches the *full* raw file."""
+        full_content = (vault / "react-setup.md").read_text()
+        results = _search_files(vault, content=f"={full_content}")
+        assert len(results) == 1
+        assert results[0].name == "react-setup"
+
+    def test_content_exact_no_partial(self, vault: Path) -> None:
+        """``--content "=React"`` does NOT match files containing "React"."""
+        results = _search_files(vault, content="=React")
+        assert results == []
+
+    # -- path-based filename matching -------------------------------------
+
+    def test_filename_substring_path(self, vault: Path) -> None:
+        """``-f "deep/hidden-note"`` matches via relative path."""
+        results = _search_files(vault, filename="deep/hidden-note")
+        assert len(results) == 1
+        assert results[0].name == "hidden-note"
+
+    def test_filename_substring_path_with_ext(self, vault: Path) -> None:
+        """``-f "deep/hidden-note.md"`` matches with extension."""
+        results = _search_files(vault, filename="deep/hidden-note.md")
+        assert len(results) == 1
+        assert results[0].name == "hidden-note"
+
+    def test_filename_exact_path(self, vault: Path) -> None:
+        """``-f "=deep/hidden-note"`` exact-match on relative path (no ext)."""
+        results = _search_files(vault, filename="=deep/hidden-note")
+        assert len(results) == 1
+        assert results[0].name == "hidden-note"
+
+    def test_filename_exact_path_with_ext(self, vault: Path) -> None:
+        """``-f "=deep/hidden-note.md"`` exact-match with extension."""
+        results = _search_files(vault, filename="=deep/hidden-note.md")
+        assert len(results) == 1
+        assert results[0].name == "hidden-note"
+
 
 # ---------------------------------------------------------------------------
 #  _display_search_results  (smoke tests)
@@ -209,6 +312,37 @@ class TestDisplaySearchResults:
         assert "flask-app.md" in captured.out
         assert "python" in captured.out
         assert "web" in captured.out
+
+
+# ---------------------------------------------------------------------------
+#  _display_file  (smoke tests)
+# ---------------------------------------------------------------------------
+
+
+class TestDisplayFile:
+    def test_outputs_full_raw_content(
+        self, vault: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        from markdown import Markdown
+
+        md = Markdown(vault / "flask-app.md")
+        _display_file(md, vault)
+        captured = capsys.readouterr()
+        # Should be the exact raw file content
+        assert "Building a web app with #flask." in captured.out
+        assert "---" in captured.out
+
+    def test_no_extra_output(
+        self, vault: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        from markdown import Markdown
+
+        raw = (vault / "flask-app.md").read_text()
+        md = Markdown(vault / "flask-app.md")
+        _display_file(md, vault)
+        captured = capsys.readouterr()
+        # Output is exactly the raw content, nothing else
+        assert captured.out == raw
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +380,14 @@ class TestBuildParser:
         assert args.tags == "foo,bar"
         assert args.force is True
         assert args.path == "/tmp"
+
+    def test_read_subcommand_registered(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["read", "my-note"])
+        assert args.command == "read"
+        assert args.filename == "my-note"
+
+    def test_read_filename_is_required(self) -> None:
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["read"])

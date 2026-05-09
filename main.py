@@ -75,34 +75,91 @@ def _create_markdown(target: Path, name: str, force: bool = False) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _parse_filter(value: str) -> tuple[bool, str]:
+    """Parse a filter value into (exact_match, clean_value).
+
+    ``"=python"`` → ``(True, "python")``  — exact match
+    ``"python"``   → ``(False, "python")`` — substring / containment match
+    ``"= hello"``  → ``(True, " hello")``  — spaces after ``=`` are preserved
+    """
+    if value.startswith("="):
+        return True, value[1:]
+    return False, value
+
+
 def _search_files(
-    target: Path,
+    vault_root: Path,
     tags: list[str] | None = None,
     filename: str | None = None,
     content: str | None = None,
 ) -> list[Markdown]:
-    """Walk *target* for ``.md`` files and return those matching all criteria.
+    """Walk *vault_root* for ``.md`` files and return those matching.
+
+    Filter values prefixed with ``=`` require an **exact** match;
+    unprefixed values use substring / containment matching.
+
+    Examples::
+
+        --tags py          # tag contains "py" (matches "python")
+        --tags "=python"   # tag equals "python"
+        --filename test    # filename contains "test"
+        --filename "=test" # filename equals "test"
 
     Filters are applied cheapest-first:
-      1. Filename substring (no parsing needed)
-      2. Content substring (raw text scan)
-      3. Tags (requires full ``Markdown`` object — most expensive)
+      1. Filename (no parsing needed)
+      2. Content  (raw text scan)
+      3. Tags     (requires full ``Markdown`` object)
     """
+    # Parse exact/substring flags upfront.
+    filename_exact, filename_val = (
+        _parse_filter(filename) if filename else (False, None)
+    )
+    content_exact, content_val = (
+        _parse_filter(content) if content else (False, None)
+    )
+    parsed_tags: list[tuple[bool, str]] = (
+        [_parse_filter(t) for t in tags] if tags else []
+    )
+
     results: list[Markdown] = []
 
-    for md_path in sorted(target.rglob("*.md")):
+    for md_path in sorted(vault_root.rglob("*.md")):
         # --- filename filter (cheapest) ---
-        if filename and filename.lower() not in md_path.stem.lower():
-            continue
+        if filename_val is not None:
+            stem = md_path.stem
+            # Also build the relative path from vault root for path-based
+            # queries like ``-f "folder/My Note.md"``.
+            try:
+                rel_path = md_path.relative_to(vault_root).as_posix()
+                rel_stem = md_path.relative_to(vault_root).with_suffix("").as_posix()
+            except ValueError:
+                rel_path = md_path.name
+                rel_stem = stem
+
+            if filename_exact:
+                if filename_val not in (stem, rel_path, rel_stem):
+                    continue
+            else:
+                val_lower = filename_val.lower()
+                if (
+                    val_lower not in stem.lower()
+                    and val_lower not in rel_path.lower()
+                    and val_lower not in rel_stem.lower()
+                ):
+                    continue
 
         # --- content filter (raw text scan, no full parse yet) ---
-        if content:
+        if content_val is not None:
             try:
                 raw = md_path.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 continue
-            if content.lower() not in raw.lower():
-                continue
+            if content_exact:
+                if content_val != raw:
+                    continue
+            else:
+                if content_val.lower() not in raw.lower():
+                    continue
 
         # --- tags filter (requires full parse — most expensive) ---
         try:
@@ -110,9 +167,19 @@ def _search_files(
         except Exception:
             continue
 
-        if tags:
-            md_tag_set = set(t.lower() for t in md.tags)
-            if not all(t.lower() in md_tag_set for t in tags):
+        if parsed_tags:
+            md_tag_lower = [t.lower() for t in md.tags]
+            matched = True
+            for exact, user_tag in parsed_tags:
+                if exact:
+                    if not any(user_tag.lower() == ft.lower() for ft in md.tags):
+                        matched = False
+                        break
+                else:
+                    if not any(user_tag.lower() in ft for ft in md_tag_lower):
+                        matched = False
+                        break
+            if not matched:
                 continue
 
         results.append(md)
@@ -120,8 +187,8 @@ def _search_files(
     return results
 
 
-def _display_search_results(results: list[Markdown], search_dir: Path) -> None:
-    """Print search results to stdout."""
+def _display_search_results(results: list[Markdown], vault_root: Path) -> None:
+    """Print search results with paths relative to the vault root."""
     if not results:
         print("No matching files found.")
         return
@@ -129,11 +196,11 @@ def _display_search_results(results: list[Markdown], search_dir: Path) -> None:
     print(f"\nFound {len(results)} file{'s' if len(results) != 1 else ''}:\n")
 
     # Column widths
-    name_width = max(len(_relative_stem(r, search_dir)) for r in results)
+    name_width = max(len(_relative_to_vault(r, vault_root)) for r in results)
     name_width = max(name_width, 8) + 2  ##### ≥ "Filename"
 
     for md in results:
-        rel = _relative_stem(md, search_dir)
+        rel = _relative_to_vault(md, vault_root)
         tags_str = (
             ", ".join(md.tags[:5])
             + ("..." if len(md.tags) > 5 else "")
@@ -148,14 +215,17 @@ def _display_search_results(results: list[Markdown], search_dir: Path) -> None:
     print()
 
 
-def _relative_stem(md: Markdown, search_dir: Path) -> str:
-    """Build a display path relative to the search directory."""
+def _relative_to_vault(md: Markdown, vault_root: Path) -> str:
+    """Return the file path relative to the vault root."""
     try:
-        # Try to show a relative path under the search dir
-        rel = md._path.relative_to(search_dir)
-        return rel.as_posix()
+        return md._path.relative_to(vault_root).as_posix()
     except ValueError:
         return md._path.name
+
+
+def _display_file(md: Markdown, vault_root: Path) -> None:
+    """Print the full raw content of a ``Markdown`` file."""
+    print(md.content, end="")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -205,6 +275,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Substring to match in the file content (case-insensitive)",
     )
 
+    # -- read ---------------------------------------------------------------
+    read_parser = subparsers.add_parser("read", help="Read a single markdown file by name or path")
+    read_parser.add_argument(
+        "filename",
+        help="Filename or path to match — first match wins (prefix = for exact)",
+    )
+
     return parser
 
 
@@ -225,15 +302,29 @@ def main() -> None:
         print(f"Created markdown: {markdown_path}")
 
     elif args.command == "search":
-        target = _get_folder(args.path)
+        target = _get_folder(_resolve_path(args.path))
+        vault_root = _find_vault_root(target)
         tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
         results = _search_files(
-            target,
+            vault_root,
             tags=tags,
             filename=args.filename,
             content=args.content,
         )
-        _display_search_results(results, target)
+        _display_search_results(results, vault_root)
+
+    elif args.command == "read":
+        target = _get_folder(_resolve_path())
+        vault_root = _find_vault_root(target)
+        results = _search_files(vault_root, filename=args.filename)
+
+        if not results:
+            print(f"No file found matching: {args.filename}")
+        elif len(results) > 1:
+            print(f"Multiple matches — showing first of {len(results)}:")
+            _display_file(results[0], vault_root)
+        else:
+            _display_file(results[0], vault_root)
 
 
 if __name__ == "__main__":
