@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from notekey.markdown import Markdown
+from notekey.markdown import Markdown, Section
 from notekey.utils import (
     extract_inline_tags,
     extract_markdown_links,
@@ -324,6 +324,84 @@ class TestMarkdownMetadata:
 
 
 # ---------------------------------------------------------------------------
+#  Markdown – sections
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownSections:
+    def test_sections_from_frontmatter_file_use_markdown_line_index(
+        self, sample_md: Path
+    ) -> None:
+        md = Markdown(sample_md)
+        assert md.sections[0] == Section(
+            title="Test Note",
+            heading=1,
+            content=(
+                "This is a test markdown file.\n\n"
+                "Inline tags like #python and #testing should be detected.\n\n"
+                "Nested tags like #project/active and #topic/obsidian/plugins.\n\n"
+                "Wiki links:\n"
+                "- [[another-note]]\n"
+                "- [[note with spaces]]\n"
+                "- [[target-note|Display Text]]\n"
+                "- [[page]]\n\n"
+                "Markdown links:\n"
+                "- [External Link](https://example.com)\n"
+                "- [Relative Link](./another-page.md)"
+            ),
+            index=8,
+        )
+
+    def test_sections_include_nested_heading_levels(self, tmp_path: Path) -> None:
+        path = tmp_path / "sections.md"
+        path.write_text(
+            "# First ###\n\n"
+            "First paragraph.\n\n"
+            "## Second\n\n"
+            "Second paragraph.\n\n"
+            "###### Sixth\n",
+            encoding="utf-8",
+        )
+        md = Markdown(path)
+        assert md.sections == [
+            Section(
+                title="First",
+                heading=1,
+                content="First paragraph.",
+                index=0,
+            ),
+            Section(
+                title="Second",
+                heading=2,
+                content="Second paragraph.",
+                index=4,
+            ),
+            Section(title="Sixth", heading=6, content="", index=8),
+        ]
+
+    def test_sections_ignore_headings_inside_fenced_code(self, tmp_path: Path) -> None:
+        path = tmp_path / "fenced.md"
+        path.write_text(
+            "# Real\n\n"
+            "```markdown\n"
+            "## Not a section\n"
+            "```\n\n"
+            "## After\n\n"
+            "Body.",
+            encoding="utf-8",
+        )
+        md = Markdown(path)
+        assert [section.title for section in md.sections] == ["Real", "After"]
+        assert "## Not a section" in md.sections[0].content
+
+    def test_no_heading_returns_empty_sections(
+        self, sample_md_tags_in_frontmatter_only: Path
+    ) -> None:
+        md = Markdown(sample_md_tags_in_frontmatter_only)
+        assert md.sections == []
+
+
+# ---------------------------------------------------------------------------
 #  Markdown – reading time
 # ---------------------------------------------------------------------------
 
@@ -381,6 +459,21 @@ class TestMarkdownWrite:
         md.write(new_content)
         assert sample_md.read_text(encoding="utf-8") == new_content
         assert md.content == new_content
+
+    def test_write_refreshes_derived_attributes(self, sample_md: Path) -> None:
+        md = Markdown(sample_md)
+        md.write("# New Content\n\nSee [[target]] and #updated.\n")
+        assert md.metadata == {}
+        assert md.tags == ["updated"]
+        assert md.links == ["target"]
+        assert md.sections == [
+            Section(
+                title="New Content",
+                heading=1,
+                content="See [[target]] and #updated.",
+                index=0,
+            )
+        ]
 
     def test_write_updates_size_and_mtime(self, sample_md: Path) -> None:
         md = Markdown(sample_md)
