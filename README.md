@@ -6,7 +6,7 @@ CLI utilities for working with Markdown notes in an Obsidian vault.
 
 - initialize a folder with an Obsidian `.base` file and a matching Markdown note
 - search vault notes by tag, filename, or content
-- read a single note by filename or path match
+- read a single note, discover its headings, or read a specific heading section
 
 ## Requirements
 
@@ -26,7 +26,7 @@ pip install notekey
 ```bash
 notekey init [path]
 notekey search [path] [--tags TAGS] [--filename NAME] [--content TEXT]
-notekey read FILENAME
+notekey read FILENAME [--sections | --section SECTION] [--json]
 ```
 
 For `init`, omitting `path` uses the current directory.
@@ -100,7 +100,7 @@ notekey search --tags "=python"
 notekey search --filename "=deep/hidden-note"
 ```
 
-### Read a note
+### Read a note or section
 
 ```bash
 notekey read flask-app
@@ -110,6 +110,50 @@ For an exact filename match:
 
 ```bash
 notekey read "=flask-app"
+```
+
+List the headings in a note before choosing a section:
+
+```bash
+notekey read flask-app --sections
+```
+
+Example output:
+
+```text
+flask-app.md
+
+  1  # Flask App
+  2  ## Setup
+  3  ## Open Questions
+  4  ### API Shape
+```
+
+Read a section by its 1-based outline number:
+
+```bash
+notekey read flask-app --section 3
+```
+
+Read a section by a case-insensitive title substring:
+
+```bash
+notekey read flask-app --section api
+```
+
+Section reads include the selected heading and its nested child headings, stopping at the next heading of the same or higher level. If a title search matches multiple headings, `notekey` prints the matching outline entries so you can retry with a number or a more specific title.
+
+For exact section title matching, prefix the section query with `=`:
+
+```bash
+notekey read flask-app --section "=API Shape"
+```
+
+Section discovery and section reads can return JSON:
+
+```bash
+notekey read flask-app --sections --json
+notekey read flask-app --section 4 --json
 ```
 
 ## Development

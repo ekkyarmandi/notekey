@@ -7,7 +7,7 @@ from importlib.metadata import version
 from pathlib import Path
 from urllib.parse import quote
 
-from notekey.markdown import Markdown
+from notekey.markdown import Markdown, Section
 from notekey.template import BASE_FILTER_TEMPLATE, MOC_TEMPLATE
 from notekey.utils import normalize_size
 
@@ -254,6 +254,150 @@ def _display_file(md: Markdown, vault_root: Path) -> None:
     print(md.content, end="")
 
 
+def _section_outline(md: Markdown) -> list[tuple[int, Section]]:
+    """Return 1-based section numbers paired with parsed sections."""
+    return list(enumerate(md.sections, start=1))
+
+
+def _section_json(
+    md: Markdown,
+    vault_root: Path,
+    number: int,
+    section: Section,
+    content: str | None = None,
+) -> dict:
+    """Convert a section to a JSON-safe dictionary."""
+    data = {
+        "number": number,
+        "title": section.title,
+        "heading": section.heading,
+        "line": section.index + 1,
+        "path": _relative_to_vault(md, vault_root),
+    }
+    if content is not None:
+        data["content"] = content
+    return data
+
+
+def _display_sections(
+    md: Markdown, vault_root: Path, json_output: bool = False
+) -> None:
+    """Print a note's section outline."""
+    outline = _section_outline(md)
+
+    if json_output:
+        print(
+            json.dumps(
+                {
+                    "name": md.name,
+                    "path": _relative_to_vault(md, vault_root),
+                    "sections": [
+                        _section_json(md, vault_root, number, section)
+                        for number, section in outline
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return
+
+    rel_path = _relative_to_vault(md, vault_root)
+    if not outline:
+        print(f"No sections found in {rel_path}.")
+        return
+
+    print(f"{rel_path}\n")
+    number_width = len(str(len(outline)))
+    for number, section in outline:
+        marker = "#" * section.heading
+        print(f"  {number:>{number_width}}  {marker} {section.title}")
+
+
+def _find_sections(md: Markdown, query: str) -> list[tuple[int, Section]]:
+    """Find sections by 1-based number or case-insensitive title match."""
+    outline = _section_outline(md)
+
+    try:
+        number = int(query)
+    except ValueError:
+        number = 0
+
+    if 1 <= number <= len(outline):
+        return [outline[number - 1]]
+
+    exact, value = _parse_filter(query)
+    value_lower = value.lower()
+    if exact:
+        return [
+            (number, section)
+            for number, section in outline
+            if section.title.lower() == value_lower
+        ]
+
+    return [
+        (number, section)
+        for number, section in outline
+        if value_lower in section.title.lower()
+    ]
+
+
+def _section_subtree_content(md: Markdown, selected: Section) -> str:
+    """Return a section and nested subsections until the next peer/ancestor."""
+    lines = md.content.splitlines()
+    end = len(lines)
+
+    for section in md.sections:
+        if section.index <= selected.index:
+            continue
+        if section.heading <= selected.heading:
+            end = section.index
+            break
+
+    return "\n".join(lines[selected.index : end]).rstrip("\n") + "\n"
+
+
+def _display_section_match(
+    md: Markdown,
+    vault_root: Path,
+    match: tuple[int, Section],
+    json_output: bool = False,
+) -> None:
+    """Print a selected section as Markdown or JSON."""
+    number, section = match
+    content = _section_subtree_content(md, section)
+
+    if json_output:
+        print(
+            json.dumps(
+                _section_json(md, vault_root, number, section, content), indent=2
+            )
+        )
+        return
+
+    print(content, end="")
+
+
+def _display_section_match_error(
+    md: Markdown,
+    vault_root: Path,
+    query: str,
+    matches: list[tuple[int, Section]],
+) -> None:
+    """Print a helpful message for missing or ambiguous section lookups."""
+    if not matches:
+        print(f"No section found matching: {query}")
+        return
+
+    print(f'Multiple sections match "{query}":\n')
+    number_width = len(str(len(md.sections)))
+    for number, section in matches:
+        marker = "#" * section.heading
+        print(f"  {number:>{number_width}}  {marker} {section.title}")
+    print(
+        f"\nUse --section NUMBER or a more specific title in {_relative_to_vault(md, vault_root)}."
+    )
+
+
 # ---------------------------------------------------------------------------
 #  Tags
 # ---------------------------------------------------------------------------
@@ -269,9 +413,7 @@ def _compute_tags(vault_root: Path) -> list[tuple[str, int]]:
     return counter.most_common()
 
 
-def _display_tags(
-    tags: list[tuple[str, int]], json_output: bool = False
-) -> None:
+def _display_tags(tags: list[tuple[str, int]], json_output: bool = False) -> None:
     """Print tag index — table or JSON."""
     if json_output:
         data = [{"tag": t, "count": c} for t, c in tags]
@@ -399,9 +541,7 @@ def _compute_stats(vault_root: Path) -> dict:
     }
 
 
-def _display_stats(
-    stats: dict, vault_root: Path, json_output: bool = False
-) -> None:
+def _display_stats(stats: dict, vault_root: Path, json_output: bool = False) -> None:
     """Print vault stats — table or JSON."""
     if json_output:
         data = {
@@ -410,12 +550,16 @@ def _display_stats(
             "total_size_bytes": stats["total_size_bytes"],
             "total_size": normalize_size(stats["total_size_bytes"]),
             "total_words": stats["total_words"],
-            "newest": _relative_to_vault(stats["newest"], vault_root)
-            if stats["newest"]
-            else None,
-            "oldest": _relative_to_vault(stats["oldest"], vault_root)
-            if stats["oldest"]
-            else None,
+            "newest": (
+                _relative_to_vault(stats["newest"], vault_root)
+                if stats["newest"]
+                else None
+            ),
+            "oldest": (
+                _relative_to_vault(stats["oldest"], vault_root)
+                if stats["oldest"]
+                else None
+            ),
             "top_tags": [{"tag": t, "count": c} for t, c in stats["top_tags"]],
         }
         print(json.dumps(data, indent=2))
@@ -518,11 +662,24 @@ def build_parser() -> argparse.ArgumentParser:
         "filename",
         help="Filename or path to match — first match wins (prefix = for exact)",
     )
+    read_group = read_parser.add_mutually_exclusive_group()
+    read_group.add_argument(
+        "--sections",
+        action="store_true",
+        help="List available Markdown headings in the matched note",
+    )
+    read_group.add_argument(
+        "--section",
+        help="Read a heading subtree by 1-based section number or title match",
+    )
+    read_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output section discovery or selected section as JSON",
+    )
 
     # -- tags ---------------------------------------------------------------
-    tags_parser = subparsers.add_parser(
-        "tags", help="List all unique tags with counts"
-    )
+    tags_parser = subparsers.add_parser("tags", help="List all unique tags with counts")
     tags_parser.add_argument(
         "--json",
         action="store_true",
@@ -544,18 +701,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # -- open ---------------------------------------------------------------
-    open_parser = subparsers.add_parser(
-        "open", help="Open a note in Obsidian"
-    )
+    open_parser = subparsers.add_parser("open", help="Open a note in Obsidian")
     open_parser.add_argument(
         "filename",
         help="Filename or path to match — first match wins",
     )
 
     # -- stats --------------------------------------------------------------
-    stats_parser = subparsers.add_parser(
-        "stats", help="Show vault-wide statistics"
-    )
+    stats_parser = subparsers.add_parser("stats", help="Show vault-wide statistics")
     stats_parser.add_argument(
         "--json",
         action="store_true",
@@ -600,11 +753,24 @@ def main() -> None:
 
         if not results:
             print(f"No file found matching: {args.filename}")
-        elif len(results) > 1:
+            return
+
+        md = results[0]
+        if len(results) > 1 and not args.json:
             print(f"Multiple matches — showing first of {len(results)}:")
-            _display_file(results[0], vault_root)
+
+        if args.sections:
+            _display_sections(md, vault_root, json_output=args.json)
+        elif args.section:
+            matches = _find_sections(md, args.section)
+            if len(matches) == 1:
+                _display_section_match(
+                    md, vault_root, matches[0], json_output=args.json
+                )
+            else:
+                _display_section_match_error(md, vault_root, args.section, matches)
         else:
-            _display_file(results[0], vault_root)
+            _display_file(md, vault_root)
 
     elif args.command == "tags":
         target = _get_folder(_resolve_path())

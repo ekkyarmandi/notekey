@@ -17,10 +17,14 @@ from notekey.main import (
     _create_markdown,
     _display_backlinks,
     _display_file,
+    _display_section_match,
+    _display_section_match_error,
+    _display_sections,
     _display_search_results,
     _display_stats,
     _display_tags,
     _filename_candidates,
+    _find_sections,
     _find_vault_root,
     _get_folder,
     _json_serializable,
@@ -29,6 +33,9 @@ from notekey.main import (
     _relative_to_vault,
     _resolve_path,
     _search_files,
+    _section_json,
+    _section_outline,
+    _section_subtree_content,
     build_parser,
     main,
 )
@@ -46,7 +53,8 @@ def vault(tmp_path: Path) -> Path:
     (root / ".obsidian").mkdir()
 
     # File A: has tags "python" and "web", mentions "flask"
-    (root / "flask-app.md").write_text("""\
+    (root / "flask-app.md").write_text(
+        """\
 ---
 title: Flask App
 tags: [python, web]
@@ -54,10 +62,12 @@ tags: [python, web]
 # Flask App
 
 Building a web app with #flask.
-""")
+"""
+    )
 
     # File B: has tags "python" and "data", mentions "pandas"
-    (root / "pandas-guide.md").write_text("""\
+    (root / "pandas-guide.md").write_text(
+        """\
 ---
 title: Pandas Guide
 tags: [python, data]
@@ -65,10 +75,12 @@ tags: [python, data]
 # Pandas Guide
 
 Working with #pandas and dataframes.
-""")
+"""
+    )
 
     # File C: has tags "javascript" and "web", mentions "react"
-    (root / "react-setup.md").write_text("""\
+    (root / "react-setup.md").write_text(
+        """\
 ---
 title: React Setup
 tags: [javascript, web]
@@ -76,25 +88,30 @@ tags: [javascript, web]
 # React Setup
 
 Getting started with #react.
-""")
+"""
+    )
 
     # File D: no frontmatter tags, but has inline #tag, no frontmatter
-    (root / "scratchpad.md").write_text("""\
+    (root / "scratchpad.md").write_text(
+        """\
 # Scratchpad
 
 Random thoughts and #ideas.
-""")
+"""
+    )
 
     # File E: in subdirectory
     sub = root / "deep"
     sub.mkdir()
-    (sub / "hidden-note.md").write_text("""\
+    (sub / "hidden-note.md").write_text(
+        """\
 ---
 title: Hidden
 tags: [python, devops]
 ---
 Hidden note about #docker and #kubernetes.
-""")
+"""
+    )
 
     return root
 
@@ -106,37 +123,82 @@ def vault_with_links(tmp_path: Path) -> Path:
     root.mkdir()
     (root / ".obsidian").mkdir()
 
-    (root / "note-a.md").write_text("""\
+    (root / "note-a.md").write_text(
+        """\
 ---
 title: Note A
 tags: [alpha]
 ---
 Links to [[note-b]] and [[note-c]].
-""")
+"""
+    )
 
-    (root / "note-b.md").write_text("""\
+    (root / "note-b.md").write_text(
+        """\
 ---
 title: Note B
 tags: [beta]
 ---
 Links to [[note-a]] and [[note-c]].
-""")
+"""
+    )
 
-    (root / "note-c.md").write_text("""\
+    (root / "note-c.md").write_text(
+        """\
 ---
 title: Note C
 tags: [gamma]
 ---
 No outgoing links.
-""")
+"""
+    )
 
-    (root / "note-d.md").write_text("""\
+    (root / "note-d.md").write_text(
+        """\
 ---
 title: Note D
 tags: [delta]
 ---
 Links to [[note-a|Display]] and [[note-b]].
-""")
+"""
+    )
+
+    return root
+
+
+@pytest.fixture
+def vault_with_sections(tmp_path: Path) -> Path:
+    """A small vault with a note that has nested Markdown sections."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    (root / ".obsidian").mkdir()
+
+    (root / "project.md").write_text(
+        """\
+---
+title: Project
+---
+# Project Notes
+
+Intro text.
+
+## Goals
+
+Goal text.
+
+### API Shape
+
+API details.
+
+## Open Questions
+
+Question text.
+
+## API Migration
+
+Migration text.
+"""
+    )
 
     return root
 
@@ -572,6 +634,186 @@ class TestDisplayFile:
 
 
 # ---------------------------------------------------------------------------
+#  section display / matching helpers
+# ---------------------------------------------------------------------------
+
+
+class TestSectionHelpers:
+    def test_section_outline_numbers_sections(self, vault_with_sections: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        outline = _section_outline(md)
+
+        assert [number for number, _ in outline] == [1, 2, 3, 4, 5]
+        assert [section.title for _, section in outline] == [
+            "Project Notes",
+            "Goals",
+            "API Shape",
+            "Open Questions",
+            "API Migration",
+        ]
+
+    def test_section_json_without_content(self, vault_with_sections: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        data = _section_json(md, vault_with_sections, *_section_outline(md)[0])
+
+        assert data == {
+            "number": 1,
+            "title": "Project Notes",
+            "heading": 1,
+            "line": 4,
+            "path": "project.md",
+        }
+
+    def test_section_json_with_content(self, vault_with_sections: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        data = _section_json(
+            md, vault_with_sections, *_section_outline(md)[1], content="body"
+        )
+
+        assert data["content"] == "body"
+
+    def test_display_sections(self, vault_with_sections: Path, capsys) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        _display_sections(md, vault_with_sections)
+
+        captured = capsys.readouterr()
+        assert "project.md" in captured.out
+        assert "1  # Project Notes" in captured.out
+        assert "3  ### API Shape" in captured.out
+
+    def test_display_sections_json(self, vault_with_sections: Path, capsys) -> None:
+        from notekey.markdown import Markdown
+        import json
+
+        md = Markdown(vault_with_sections / "project.md")
+        _display_sections(md, vault_with_sections, json_output=True)
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["name"] == "project"
+        assert data["sections"][2]["title"] == "API Shape"
+
+    def test_display_sections_empty(self, vault: Path, capsys) -> None:
+        from notekey.markdown import Markdown
+
+        path = vault / "plain.md"
+        path.write_text("No headings here.")
+        md = Markdown(path)
+        _display_sections(md, vault)
+
+        captured = capsys.readouterr()
+        assert "No sections found in plain.md." in captured.out
+
+    def test_find_sections_by_number(self, vault_with_sections: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+
+        assert _find_sections(md, "3")[0][1].title == "API Shape"
+
+    def test_find_sections_by_partial_title(self, vault_with_sections: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+
+        assert [section.title for _, section in _find_sections(md, "api")] == [
+            "API Shape",
+            "API Migration",
+        ]
+
+    def test_find_sections_by_exact_title(self, vault_with_sections: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+
+        assert [section.title for _, section in _find_sections(md, "=api shape")] == [
+            "API Shape"
+        ]
+
+    def test_find_sections_no_match(self, vault_with_sections: Path) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+
+        assert _find_sections(md, "missing") == []
+
+    def test_section_subtree_content_includes_nested_sections(
+        self, vault_with_sections: Path
+    ) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        _, section = _find_sections(md, "2")[0]
+        content = _section_subtree_content(md, section)
+
+        assert content.startswith("## Goals")
+        assert "### API Shape" in content
+        assert "API details." in content
+        assert "## Open Questions" not in content
+        assert content.endswith("\n")
+
+    def test_display_section_match_plain(
+        self, vault_with_sections: Path, capsys
+    ) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        _display_section_match(md, vault_with_sections, _find_sections(md, "4")[0])
+
+        captured = capsys.readouterr()
+        assert captured.out == "## Open Questions\n\nQuestion text.\n"
+
+    def test_display_section_match_json(
+        self, vault_with_sections: Path, capsys
+    ) -> None:
+        from notekey.markdown import Markdown
+        import json
+
+        md = Markdown(vault_with_sections / "project.md")
+        _display_section_match(
+            md, vault_with_sections, _find_sections(md, "Goals")[0], json_output=True
+        )
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["number"] == 2
+        assert data["content"].startswith("## Goals")
+
+    def test_display_section_match_error_no_matches(
+        self, vault_with_sections: Path, capsys
+    ) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        _display_section_match_error(md, vault_with_sections, "missing", [])
+
+        captured = capsys.readouterr()
+        assert "No section found matching: missing" in captured.out
+
+    def test_display_section_match_error_multiple_matches(
+        self, vault_with_sections: Path, capsys
+    ) -> None:
+        from notekey.markdown import Markdown
+
+        md = Markdown(vault_with_sections / "project.md")
+        _display_section_match_error(
+            md, vault_with_sections, "api", _find_sections(md, "api")
+        )
+
+        captured = capsys.readouterr()
+        assert 'Multiple sections match "api"' in captured.out
+        assert "3  ### API Shape" in captured.out
+        assert "5  ## API Migration" in captured.out
+        assert "Use --section NUMBER" in captured.out
+
+
+# ---------------------------------------------------------------------------
 #  main() command branches
 # ---------------------------------------------------------------------------
 
@@ -673,6 +915,96 @@ class TestMainCommandBranches:
         captured = capsys.readouterr()
         assert "Multiple matches" in captured.out
 
+    def test_main_read_sections(
+        self,
+        vault_with_sections: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_sections))
+        monkeypatch.setattr(sys, "argv", ["notekey", "read", "project", "--sections"])
+
+        main()
+
+        captured = capsys.readouterr()
+        assert "project.md" in captured.out
+        assert "1  # Project Notes" in captured.out
+
+    def test_main_read_sections_json(
+        self,
+        vault_with_sections: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_sections))
+        monkeypatch.setattr(
+            sys, "argv", ["notekey", "read", "project", "--sections", "--json"]
+        )
+
+        main()
+
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert data["sections"][0]["title"] == "Project Notes"
+
+    def test_main_read_section_by_number(
+        self,
+        vault_with_sections: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_sections))
+        monkeypatch.setattr(
+            sys, "argv", ["notekey", "read", "project", "--section", "2"]
+        )
+
+        main()
+
+        captured = capsys.readouterr()
+        assert captured.out.startswith("## Goals")
+        assert "### API Shape" in captured.out
+        assert "## Open Questions" not in captured.out
+
+    def test_main_read_section_json(
+        self,
+        vault_with_sections: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_sections))
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["notekey", "read", "project", "--section", "Open", "--json"],
+        )
+
+        main()
+
+        captured = capsys.readouterr()
+        import json
+
+        data = json.loads(captured.out)
+        assert data["title"] == "Open Questions"
+        assert data["content"] == "## Open Questions\n\nQuestion text.\n"
+
+    def test_main_read_section_multiple_matches(
+        self,
+        vault_with_sections: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("OBSIDIAN_VAULT", str(vault_with_sections))
+        monkeypatch.setattr(
+            sys, "argv", ["notekey", "read", "project", "--section", "api"]
+        )
+
+        main()
+
+        captured = capsys.readouterr()
+        assert 'Multiple sections match "api"' in captured.out
+
     def test_script_entrypoint(
         self,
         vault: Path,
@@ -740,6 +1072,25 @@ class TestBuildParser:
         args = parser.parse_args(["read", "my-note"])
         assert args.command == "read"
         assert args.filename == "my-note"
+        assert args.sections is False
+        assert args.section is None
+        assert args.json is False
+
+    def test_read_sections_flag(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["read", "my-note", "--sections"])
+        assert args.sections is True
+
+    def test_read_section_flag(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["read", "my-note", "--section", "API", "--json"])
+        assert args.section == "API"
+        assert args.json is True
+
+    def test_read_sections_and_section_are_exclusive(self) -> None:
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["read", "my-note", "--sections", "--section", "API"])
 
     def test_read_filename_is_required(self) -> None:
         parser = build_parser()
